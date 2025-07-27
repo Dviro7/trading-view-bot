@@ -1,31 +1,68 @@
 from flask import Flask, request, jsonify
-import requests
-import os
 
 app = Flask(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7692770954:AAED9zJC-GHgp2F-W-75dXGrGlTyKX2yyQU")
-CHAT_ID = os.getenv("CHAT_ID", "524990252")
+# שמירת מצב הפוזיציה
+trade_state = {
+    "position": None,  # None / long / short
+    "size": 0
+}
 
-def send_telegram_message(message: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
-    return requests.post(url, data=data)
-
-@app.route("/", methods=["GET"])
+@app.route('/')
 def home():
-    return "DVIRTRADER Webhook is live."
+    return "Simulated Trading Bot is Live!"
 
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.json
-    action = data.get("action", "no-action").upper()
-    position_size = data.get("position_size", 0)
-    oscillator = data.get("oscillator", 0.0)
+    data = request.get_json()
 
-    msg = f"🚨 DVIRTRADER SIGNAL 🚨\nAction: {action}\nStochastic: {oscillator}\nSize: {position_size}x"
-    send_telegram_message(msg)
-    return jsonify({"status": "ok", "message": "Signal received"}), 200
+    if not data or 'stochastic' not in data:
+        return jsonify({"error": "Missing 'stochastic' field"}), 400
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    stochastic = float(data['stochastic'])
+    response = {}
+
+    # כניסה ללונג
+    if stochastic <= -90 and trade_state["position"] is None:
+        trade_state["position"] = "long"
+        trade_state["size"] = 1.0
+        response["action"] = "Opened LONG x20 at stochastic -90"
+
+    # כניסה לשורט
+    elif stochastic >= 90 and trade_state["position"] is None:
+        trade_state["position"] = "short"
+        trade_state["size"] = 1.0
+        response["action"] = "Opened SHORT x20 at stochastic +90"
+
+    # סגירת חצי פוזיציה ב־0.01
+    elif abs(stochastic) <= 0.01 and trade_state["position"] and trade_state["size"] == 1.0:
+        trade_state["size"] = 0.5
+        response["action"] = "Closed HALF of position at stochastic 0.01"
+
+    # סגירת לונג אם stochastic > 89
+    elif trade_state["position"] == "long" and stochastic >= 89:
+        response["action"] = "Closed FULL LONG position at stochastic >= 89"
+        trade_state["position"] = None
+        trade_state["size"] = 0
+
+    # סגירת שורט אם stochastic < -89
+    elif trade_state["position"] == "short" and stochastic <= -89:
+        response["action"] = "Closed FULL SHORT position at stochastic <= -89"
+        trade_state["position"] = None
+        trade_state["size"] = 0
+
+    # סגירה בשינוי כיוון
+    elif (trade_state["position"] == "long" and stochastic > 0) or \
+         (trade_state["position"] == "short" and stochastic < 0):
+        response["action"] = f"Closed FULL {trade_state['position']} position due to direction change"
+        trade_state["position"] = None
+        trade_state["size"] = 0
+
+    else:
+        response["action"] = "No trade action taken"
+
+    print(f"[{trade_state['position']}] Stochastic: {stochastic} -> {response['action']}")
+    return jsonify(response)
+
+if __name__ == '__main__':
+    app.run(debug=True)
